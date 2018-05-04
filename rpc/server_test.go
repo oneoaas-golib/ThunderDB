@@ -17,9 +17,15 @@
 package rpc
 
 import (
+	"bufio"
+	"bytes"
+	"fmt"
 	"net"
 	"testing"
+	"time"
 
+	"github.com/hashicorp/raft"
+	"github.com/satori/go.uuid"
 	log "github.com/sirupsen/logrus"
 	"github.com/thunderdb/ThunderDB/utils"
 )
@@ -142,5 +148,203 @@ func TestServer_Close(t *testing.T) {
 	server.SetListener(l)
 	go server.Serve()
 
+	server.Stop()
+}
+
+func TestServerHandoffRaftLayer(t *testing.T) {
+	log.SetLevel(log.DebugLevel)
+	addr := "127.0.0.1:0"
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	server := NewServer()
+	server.SetListener(l)
+	go server.Serve()
+
+	// build a test raft connection
+	lsrc, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+	lsrcAddr := lsrc.Addr()
+	lsrc.Close()
+
+	// generate random raftID
+	raftID := fmt.Sprintf("%v", uuid.Must(uuid.NewV4()))
+	r := NewRaftLayer(lsrcAddr, l.Addr(), raftID)
+	server.BindRaftLayer(raftID, r)
+
+	// dial itself
+	initConn, err := r.Dial(raft.ServerAddress(l.Addr().String()), time.Second)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	acceptConn, err := r.Accept()
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	lineData := []byte("happy\n")
+	_, err = initConn.Write(lineData)
+	acceptLineData, err := bufio.NewReader(acceptConn).ReadSlice('\n')
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	if bytes.Compare(lineData, acceptLineData) != 0 {
+		t.Errorf("%s = %s, want %s", string(lineData), string(acceptLineData),
+			string(lineData))
+	}
+
+	initConn.Close()
+	acceptConn.Close()
+	server.Stop()
+}
+
+func TestServerHandoffMultipleRaftLayer(t *testing.T) {
+	log.SetLevel(log.DebugLevel)
+	addr := "127.0.0.1:0"
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	server := NewServer()
+	server.SetListener(l)
+	go server.Serve()
+
+	// build a test raft connection
+	l1, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+	l1Addr := l1.Addr()
+	l1.Close()
+
+	l2, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+	l2Addr := l2.Addr()
+	l2.Close()
+
+	// generate random raftID
+	raftID1 := fmt.Sprintf("%v", uuid.Must(uuid.NewV4()))
+	r1 := NewRaftLayer(l1Addr, l.Addr(), raftID1)
+	server.BindRaftLayer(raftID1, r1)
+
+	raftID2 := fmt.Sprintf("%v", uuid.Must(uuid.NewV4()))
+	r2 := NewRaftLayer(l2Addr, l.Addr(), raftID2)
+	server.BindRaftLayer(raftID2, r2)
+
+	// dial itself for r1
+	initConn1, err := r1.Dial(raft.ServerAddress(l.Addr().String()), time.Second)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	acceptConn1, err := r1.Accept()
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	lineData1 := []byte("happy1\n")
+	_, err = initConn1.Write(lineData1)
+
+	// dial itself for r2
+	initConn2, err := r2.Dial(raft.ServerAddress(l.Addr().String()), time.Second)
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	acceptConn2, err := r2.Accept()
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	lineData2 := []byte("happy2\n")
+	_, err = initConn2.Write(lineData2)
+
+	acceptLineData1, err := bufio.NewReader(acceptConn1).ReadSlice('\n')
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+	acceptLineData2, err := bufio.NewReader(acceptConn2).ReadSlice('\n')
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	if bytes.Compare(lineData1, acceptLineData1) != 0 {
+		t.Errorf("%s = %s, want %s", string(lineData1), string(acceptLineData1),
+			string(lineData1))
+	}
+	if bytes.Compare(lineData2, acceptLineData2) != 0 {
+		t.Errorf("%s = %s, want %s", string(lineData2), string(acceptLineData2),
+			string(lineData2))
+	}
+
+	initConn1.Close()
+	initConn2.Close()
+	acceptConn1.Close()
+	acceptConn2.Close()
+
+	server.Stop()
+}
+
+func TestServerUnbindHandoffRaftLayer(t *testing.T) {
+	log.SetLevel(log.DebugLevel)
+	addr := "127.0.0.1:0"
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	server := NewServer()
+	server.SetListener(l)
+	go server.Serve()
+
+	// build a test raft connection
+	lsrc, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+	lsrcAddr := lsrc.Addr()
+	lsrc.Close()
+
+	// generate random raftID
+	raftID := fmt.Sprintf("%v", uuid.Must(uuid.NewV4()))
+	r := NewRaftLayer(lsrcAddr, l.Addr(), raftID)
+
+	// bind and unbind
+	server.BindRaftLayer(raftID, r)
+	server.UnbindRaftLayer(raftID)
+
+	// dial itself
+	initConn, err := r.Dial(raft.ServerAddress(l.Addr().String()), time.Second)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	complete := make(chan struct{})
+
+	go func() {
+		_, err := r.Accept()
+		if err != nil {
+			t.Fatal(err.Error())
+		}
+
+		complete <- struct{}{}
+	}()
+
+	select {
+	case <-complete:
+		t.Fatal("unbind raft layer cannot be accepted")
+	case <-time.After(time.Second * 2):
+	}
+
+	initConn.Close()
 	server.Stop()
 }

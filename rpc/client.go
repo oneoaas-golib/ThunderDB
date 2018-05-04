@@ -49,6 +49,7 @@ func InitClient(addr string) (client *Client, err error) {
 
 // start init session and set RPC codec
 func (c *Client) start(conn net.Conn) {
+	conn.Write([]byte{byte(ConnTypeRPC)})
 	sess, err := yamux.Client(conn, nil)
 	if err != nil {
 		log.Panic(err)
