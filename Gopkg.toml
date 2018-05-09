@@ -38,6 +38,10 @@
   name = "github.com/hashicorp/raft"
   branch = "master"
 
+[[override]]
+  name = "github.com/satori/go.uuid"
+  branch = "master"
+
 [prune]
   go-tests = true
   unused-packages = true
