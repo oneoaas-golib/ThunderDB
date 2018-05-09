@@ -19,14 +19,18 @@ package rpc
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/raft"
 	"github.com/satori/go.uuid"
 	log "github.com/sirupsen/logrus"
+	. "github.com/smartystreets/goconvey/convey"
 	"github.com/thunderdb/ThunderDB/utils"
 )
 
@@ -199,6 +203,7 @@ func TestServerHandoffRaftLayer(t *testing.T) {
 			string(lineData))
 	}
 
+	r.Close()
 	initConn.Close()
 	acceptConn.Close()
 	server.Stop()
@@ -286,6 +291,8 @@ func TestServerHandoffMultipleRaftLayer(t *testing.T) {
 			string(lineData2))
 	}
 
+	r1.Close()
+	r2.Close()
 	initConn1.Close()
 	initConn2.Close()
 	acceptConn1.Close()
@@ -307,16 +314,16 @@ func TestServerUnbindHandoffRaftLayer(t *testing.T) {
 	go server.Serve()
 
 	// build a test raft connection
-	lsrc, err := net.Listen("tcp", addr)
+	srcListener, err := net.Listen("tcp", addr)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
-	lsrcAddr := lsrc.Addr()
-	lsrc.Close()
+	srcAddr := srcListener.Addr()
+	srcListener.Close()
 
 	// generate random raftID
 	raftID := fmt.Sprintf("%v", uuid.Must(uuid.NewV4()))
-	r := NewRaftLayer(lsrcAddr, l.Addr(), raftID)
+	r := NewRaftLayer(srcAddr, l.Addr(), raftID)
 
 	// bind and unbind
 	server.BindRaftLayer(raftID, r)
@@ -332,10 +339,9 @@ func TestServerUnbindHandoffRaftLayer(t *testing.T) {
 
 	go func() {
 		_, err := r.Accept()
-		if err != nil {
-			t.Fatal(err.Error())
+		if !strings.Contains(err.Error(), "closed") {
+			t.Error(err.Error())
 		}
-
 		complete <- struct{}{}
 	}()
 
@@ -345,6 +351,100 @@ func TestServerUnbindHandoffRaftLayer(t *testing.T) {
 	case <-time.After(time.Second * 2):
 	}
 
+	r.Close()
 	initConn.Close()
+	server.Stop()
+}
+
+func TestServerInvalidConnType(t *testing.T) {
+	log.SetLevel(log.DebugLevel)
+
+	addr := "127.0.0.1:0"
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	server := NewServer()
+	server.SetListener(l)
+	go server.Serve()
+
+	// initiate connection with no interaction
+	Convey("connect with no interaction", t, func() {
+		conn, err := net.Dial("tcp", l.Addr().String())
+		So(err, ShouldBeNil)
+		conn.Close()
+	})
+
+	// initiate connection with invalid ConnType
+	Convey("invalid ConnType", t, func() {
+		conn, err := net.Dial("tcp", l.Addr().String())
+		So(err, ShouldBeNil)
+		_, err = conn.Write([]byte{byte(127)})
+		So(err, ShouldBeNil)
+		conn.SetDeadline(time.Now().Add(time.Second))
+		buffer := make([]byte, 1)
+		_, err = conn.Read(buffer)
+		So(err, ShouldEqual, io.EOF)
+		conn.Close()
+	})
+
+	server.Stop()
+}
+
+func TestServerInvalidRaftConnection(t *testing.T) {
+	log.SetLevel(log.DebugLevel)
+
+	addr := "127.0.0.1:0"
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	server := NewServer()
+	server.SetListener(l)
+	go server.Serve()
+
+	// initiate connection with no raft id length
+	Convey("no raft id length", t, func() {
+		conn, err := net.Dial("tcp", l.Addr().String())
+		So(err, ShouldBeNil)
+		_, err = conn.Write([]byte{byte(ConnTypeRaft)})
+		So(err, ShouldBeNil)
+		conn.Close()
+	})
+
+	// initiate connection with zero raft id length
+	Convey("zero raft id length", t, func() {
+		conn, err := net.Dial("tcp", l.Addr().String())
+		So(err, ShouldBeNil)
+		_, err = conn.Write([]byte{byte(ConnTypeRaft)})
+		So(err, ShouldBeNil)
+		length := uint32(0)
+		err = binary.Write(conn, binary.LittleEndian, length)
+		So(err, ShouldBeNil)
+		conn.SetDeadline(time.Now().Add(time.Second))
+		buffer := make([]byte, 1)
+		_, err = conn.Read(buffer)
+		So(err, ShouldEqual, io.EOF)
+		conn.Close()
+	})
+
+	// initiate connection with large raft id length
+	Convey("too large raft id length", t, func() {
+		conn, err := net.Dial("tcp", l.Addr().String())
+		So(err, ShouldBeNil)
+		_, err = conn.Write([]byte{byte(ConnTypeRaft)})
+		So(err, ShouldBeNil)
+		length := uint32(1024)
+		err = binary.Write(conn, binary.LittleEndian, length)
+		So(err, ShouldBeNil)
+		conn.SetDeadline(time.Now().Add(time.Second))
+		buffer := make([]byte, 1)
+		_, err = conn.Read(buffer)
+		So(err, ShouldEqual, io.EOF)
+		conn.Close()
+	})
+
 	server.Stop()
 }
