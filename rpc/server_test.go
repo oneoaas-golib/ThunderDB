@@ -27,7 +27,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashicorp/raft"
 	"github.com/satori/go.uuid"
 	log "github.com/sirupsen/logrus"
 	. "github.com/smartystreets/goconvey/convey"
@@ -181,7 +180,7 @@ func TestServerHandoffRaftLayer(t *testing.T) {
 	server.BindRaftLayer(raftID, r)
 
 	// dial itself
-	initConn, err := r.Dial(raft.ServerAddress(l.Addr().String()), time.Second)
+	initConn, err := r.Dial(l.Addr().String(), time.Second)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -246,7 +245,7 @@ func TestServerHandoffMultipleRaftLayer(t *testing.T) {
 	server.BindRaftLayer(raftID2, r2)
 
 	// dial itself for r1
-	initConn1, err := r1.Dial(raft.ServerAddress(l.Addr().String()), time.Second)
+	initConn1, err := r1.Dial(l.Addr().String(), time.Second)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -260,7 +259,7 @@ func TestServerHandoffMultipleRaftLayer(t *testing.T) {
 	_, err = initConn1.Write(lineData1)
 
 	// dial itself for r2
-	initConn2, err := r2.Dial(raft.ServerAddress(l.Addr().String()), time.Second)
+	initConn2, err := r2.Dial(l.Addr().String(), time.Second)
 	if err != nil {
 		t.Fatalf(err.Error())
 	}
@@ -330,7 +329,7 @@ func TestServerUnbindHandoffRaftLayer(t *testing.T) {
 	server.UnbindRaftLayer(raftID)
 
 	// dial itself
-	initConn, err := r.Dial(raft.ServerAddress(l.Addr().String()), time.Second)
+	initConn, err := r.Dial(l.Addr().String(), time.Second)
 	if err != nil {
 		t.Fatal(err.Error())
 	}

@@ -18,14 +18,17 @@
 package rpc
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net"
 	"sync"
 	"time"
 
-	"github.com/hashicorp/raft"
-	"encoding/binary"
+	"github.com/rqlite/rqlite/store"
 )
+
+// assert interface coerce
+var _ store.Listener = &RaftLayer{}
 
 // RaftLayer implements the raft.StreamLayer interface,
 // so that we can use a single RPC layer for Raft and Consul
@@ -101,9 +104,9 @@ func (l *RaftLayer) Addr() net.Addr {
 }
 
 // Dial is used to create a new outgoing connection
-func (l *RaftLayer) Dial(address raft.ServerAddress, timeout time.Duration) (net.Conn, error) {
+func (l *RaftLayer) Dial(address string, timeout time.Duration) (net.Conn, error) {
 	d := &net.Dialer{LocalAddr: l.src, Timeout: timeout}
-	conn, err := d.Dial("tcp", string(address))
+	conn, err := d.Dial("tcp", address)
 	if err != nil {
 		return nil, err
 	}
